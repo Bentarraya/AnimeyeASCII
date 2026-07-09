@@ -1,227 +1,86 @@
-#include <Wire.h>
-#include <Adafruit_GFX.h>
+//***********************************************************************************************
+//  This example shows how to create Robo Eyes animation sequences without the use of delay(); 
+//
+//  Hardware: You'll need a breadboard, an arduino nano r3, an I2C oled display with 1306   
+//  or 1309 chip and some jumper wires.
+//  
+//  Published in September 2024 by Dennis Hoelscher, FluxGarage
+//  www.youtube.com/@FluxGarage
+//  www.fluxgarage.com
+//
+//***********************************************************************************************
+
+
 #include <Adafruit_SSD1306.h>
-#include <VideoFrame.h>
 
-// ============ PIN CONFIG ============
-#define SDA_PIN 6
-#define SCL_PIN 7
-#define TOUCH_PIN 4
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET -1
-#define OLED_ADDRESS 0x3C
-
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// ============ ROBO EYES ============
 #include <FluxGarage_RoboEyes.h>
-RoboEyes<Adafruit_SSD1306> roboEyes(display);
+// create a RoboEyes instance using an Adafruit_SSD1306 display driver
+RoboEyes<Adafruit_SSD1306> roboEyes(display); 
 
-// ============ VARIABLES ============
-enum DisplayMode { MODE_ROBOEYES, MODE_VIDEO };
-DisplayMode currentMode = MODE_ROBOEYES;
 
-unsigned long lastTapTime = 0;
-bool waitingForSecondTap = false;
-const unsigned long DOUBLE_TAP_TIMEOUT = 300;
+// EVENT TIMER
+unsigned long eventTimer; // will save the timestamps
+bool event1wasPlayed = 0; // flag variables
+bool event2wasPlayed = 0;
+bool event3wasPlayed = 0;
 
-unsigned long eventTimer;
-bool event1wasPlayed = 0, event2wasPlayed = 0, event3wasPlayed = 0;
 
-unsigned long previousVideoMillis = 0;
-int currentFrame = 0;
-uint8_t frameBuffer[1024];
-
-// LED indikator
-#define LED_PIN 2
-
-// ============ SETUP ============
 void setup() {
-  Serial.begin(115200);
-  delay(3000);
-  Serial.println("\n========================================");
-  Serial.println("   ROBO EYES + VIDEO (FIXED)");
-  Serial.println("========================================");
-  
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);
-  
-  Serial.println("1. Init I2C...");
-  Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(800000);
-  
-  Serial.println("2. Init OLED...");
-  if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
-    Serial.println("   ❌ OLED FAILED!");
-    while(1) {
-      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-      delay(200);
-    }
+  // OLED Display
+  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3C or 0x3D
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
   }
-  Serial.println("   ✅ OLED SUCCESS!");
-  
-  // FORCE DISPLAY - TEST TAMPILAN
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(10, 10);
-  display.println("HI PIO!!");
-  display.display();
-  delay(1500);
-  
-  Serial.println("3. Init Touch Sensor...");
-  pinMode(TOUCH_PIN, INPUT);
-  Serial.println("   ✅ Touch OK");
-  
-  Serial.println("4. Init Robo Eyes...");
-  roboEyes.begin(SCREEN_WIDTH, SCREEN_HEIGHT, 100);
-  roboEyes.setAutoblinker(ON, 3, 2);
-  roboEyes.setIdleMode(ON, 2, 2);
-  roboEyes.setPosition(DEFAULT);
-  roboEyes.close();
-  roboEyes.update(); // Force update pertama
-  eventTimer = millis();
-  Serial.println("   ✅ Robo Eyes OK");
-  
-  // Tampilkan status awal
-  display.clearDisplay();
-  display.display();
-  
-  Serial.println("5. SYSTEM READY!");
-  Serial.println("   Mode: Robo Eyes");
-  Serial.println("   Double tap sensor to switch");
-  Serial.println("========================================\n");
-  
-  digitalWrite(LED_PIN, LOW);
-}
 
-// ============ LOOP ============
+  // Startup robo eyes
+  roboEyes.begin(SCREEN_WIDTH, SCREEN_HEIGHT, 100); // screen-width, screen-height, max framerate - 60-100fps are good for smooth animations
+  roboEyes.setPosition(DEFAULT); // eye position should be middle center
+  roboEyes.close(); // start with closed eyes 
+  
+  eventTimer = millis(); // start event timer from here
+
+} // end of setup
+
+
 void loop() {
-  readTouchSensor();
-  
-  if (currentMode == MODE_ROBOEYES) {
-    runRoboEyesMode();
-  } else {
-    runVideoMode();
-  }
-  
-  delay(1);
-}
+ roboEyes.update(); // update eyes drawings
 
-// ============ TOUCH SENSOR ============
-void readTouchSensor() {
-  static bool lastState = HIGH;
-  bool currentState = digitalRead(TOUCH_PIN);
-  
-  if (lastState == LOW && currentState == HIGH) {
-    unsigned long now = millis();
-    Serial.println("\n[TAP DETECTED]");
-    
-    if (!waitingForSecondTap) {
-      lastTapTime = now;
-      waitingForSecondTap = true;
-      Serial.println("  Tap 1");
-    } else {
-      if (now - lastTapTime <= DOUBLE_TAP_TIMEOUT) {
-        Serial.println("  DOUBLE TAP!");
-        toggleMode();
-        waitingForSecondTap = false;
-      } else {
-        lastTapTime = now;
-        Serial.println("  Timeout, reset");
-      }
-    }
+  // LOOPED ANIMATION SEQUENCE
+  // Do once after defined number of milliseconds
+  if(millis() >= eventTimer+2000 && event1wasPlayed == 0){
+    event1wasPlayed = 1; // flag variable to make sure the event will only be handled once
+    roboEyes.open(); // open eyes 
   }
-  lastState = currentState;
-}
-
-void toggleMode() {
-  Serial.print("  Switching mode: ");
-  if (currentMode == MODE_ROBOEYES) {
-    currentMode = MODE_VIDEO;
-    currentFrame = 0;
-    previousVideoMillis = millis();
-    Serial.println("VIDEO");
-    
-    display.clearDisplay();
-    display.display();
-    delay(500);
-    
-  } else {
-    currentMode = MODE_ROBOEYES;
-    roboEyes.close();
-    roboEyes.setMood(DEFAULT);
-    roboEyes.update();
-    eventTimer = millis();
-    event1wasPlayed = 0;
-    event2wasPlayed = 0;
-    event3wasPlayed = 0;
-    Serial.println("ROBOEYES");
-    
-    display.clearDisplay();
-    display.setTextSize(2);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(10, 10);
-    display.println("HI PIO!!");
-    display.display();
-    delay(500);
-  }
-}
-
-void runRoboEyesMode() {
-  roboEyes.update(); // Update eyes drawings (WAJIB! setiap loop)
-  
-  // Sequence animasi menggunakan timer (tanpa delay)
-  if(millis() >= eventTimer + 2000 && !event1wasPlayed) {
-    event1wasPlayed = 1;
+  // Do once after defined number of milliseconds
+  if(millis() >= eventTimer+4000 && event2wasPlayed == 0){
+    event2wasPlayed = 1; // flag variable to make sure the event will only be handled once
     roboEyes.setMood(HAPPY);
-    roboEyes.anim_laugh(); // Animasi tertawa (searah)
-    Serial.println("  [Robo] Happy");
+    roboEyes.anim_laugh();
+    //roboEyes.anim_confused();
   }
-  
-  if(millis() >= eventTimer + 4000 && !event2wasPlayed) {
-    event2wasPlayed = 1;
+  // Do once after defined number of milliseconds
+  if(millis() >= eventTimer+6000 && event3wasPlayed == 0){
+    event3wasPlayed = 1; // flag variable to make sure the event will only be handled once
     roboEyes.setMood(TIRED);
-    Serial.println("  [Robo] Tired");
+    //roboEyes.blink();
   }
-  
-  if(millis() >= eventTimer + 6000 && !event3wasPlayed) {
-    event3wasPlayed = 1;
-    roboEyes.setMood(ANGRY);
-    Serial.println("  [Robo] Angry");
-  }
-  
-  if(millis() >= eventTimer + 8000) {
+  // Do once after defined number of milliseconds, then reset timer and flags to restart the whole animation sequence
+  if(millis() >= eventTimer+8000){
+    roboEyes.close(); // close eyes again
     roboEyes.setMood(DEFAULT);
-    roboEyes.setPosition(DEFAULT);
-    eventTimer = millis();
-    event1wasPlayed = 0;
+    // Reset the timer and the event flags to restart the whole "complex animation loop"
+    eventTimer = millis(); // reset timer
+    event1wasPlayed = 0; // reset flags
     event2wasPlayed = 0;
     event3wasPlayed = 0;
-    Serial.println("  [Robo] Reset to Default");
   }
-}
+  // END OF LOOPED ANIMATION SEQUENCE
 
-// ============ VIDEO MODE ============
-void runVideoMode() {
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousVideoMillis >= FRAME_DELAY) {
-    previousVideoMillis = currentMillis;
-    
-    if(currentFrame < TOTAL_FRAMES) {
-      // Baca frame dari PROGMEM
-      memcpy_P(frameBuffer, video_frames[currentFrame], 1024);
-      
-      display.clearDisplay();
-      display.drawBitmap(0, 0, frameBuffer, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
-      display.display(); // Pastikan display di-refresh
-      
-      currentFrame++;
-      if (currentFrame >= TOTAL_FRAMES) {
-        currentFrame = 0;
-        Serial.println("  [Video] Loop restart");
-      }
-    }
-  }
-}
+} // end of main loop
